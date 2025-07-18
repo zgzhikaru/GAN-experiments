@@ -226,16 +226,22 @@ class Configurations(object):
         # number of batch size for GAN training,
         # typically {CIFAR10: 64, CIFAR100: 64, Tiny_ImageNet: 1024, "CUB200": 256, ImageNet: 512(batch_size) * 4(accm_step)"}
         self.OPTIMIZATION.batch_size = 64
+        # number of batch size for evaluation
+        self.OPTIMIZATION.eval_batch_size = 256
         # acuumulation steps for large batch training (batch_size = batch_size*accm_step)
         self.OPTIMIZATION.acml_steps = 1
         # learning rate for generator update
         self.OPTIMIZATION.g_lr = 0.0002
         # learning rate for discriminator update
         self.OPTIMIZATION.d_lr = 0.0002
+        # learning rate for info head update
+        self.OPTIMIZATION.i_lr = 0.0002
         # weight decay strength for the generator update
         self.OPTIMIZATION.g_weight_decay = 0.0
         # weight decay strength for the discriminator update
         self.OPTIMIZATION.d_weight_decay = 0.0
+        # weight decay strength for the info head update
+        self.OPTIMIZATION.i_weight_decay = 0.0
         # momentum value for SGD and RMSprop optimizers
         self.OPTIMIZATION.momentum = "N/A"
         # nesterov value for SGD optimizer
@@ -340,7 +346,7 @@ class Configurations(object):
         # -----------------------------------------------------------------------------
         self.MISC = misc.make_empty_object()
 
-        self.MISC.no_proc_data = ["CIFAR10", "CIFAR100", "Tiny_ImageNet"]
+        self.MISC.no_proc_data = ["CIFAR10", "CIFAR100"]    #, "Tiny_ImageNet"] # Enable resize option for TIN dataset
         self.MISC.base_folders = ["checkpoints", "figures", "logs", "moments", "samples", "values"]
         self.MISC.classifier_based_GAN = ["AC", "2C", "D2DCE"]
         self.MISC.info_params = ["info_discrete_linear", "info_conti_mu_linear", "info_conti_var_linear"]
@@ -376,6 +382,7 @@ class Configurations(object):
                 "bottleneck": True
             },
         }
+        self.MISC.cas_setting['CIFAR100'] = self.MISC.cas_setting['CIFAR10']
 
         # -----------------------------------------------------------------------------
         # Module settings
@@ -873,4 +880,4 @@ class Configurations(object):
             "RUN.save_freq should be divided by RUN.print_freq for wandb logging."
 
         assert self.RUN.pre_resizer in ["wo_resize", "nearest", "bilinear", "bicubic", "lanczos"], \
-            "The interpolation filter for pre-precessing should be \in ['wo_resize', 'nearest', 'bilinear', 'bicubic', 'lanczos']"
+            "The interpolation filter for pre-precessing should be in ['wo_resize', 'nearest', 'bilinear', 'bicubic', 'lanczos']"

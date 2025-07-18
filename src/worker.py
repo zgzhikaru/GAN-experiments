@@ -217,11 +217,14 @@ class WORKER(object):
         # toggle gradients of the generator and discriminator
         misc.toggle_grad(model=self.Gen, grad=False, num_freeze_layers=-1, is_stylegan=self.is_stylegan)
         misc.toggle_grad(model=self.Dis, grad=True, num_freeze_layers=self.RUN.freezeD, is_stylegan=self.is_stylegan)
+
+
         if self.MODEL.info_type in ["discrete", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[0]), grad=False, num_freeze_layers=-1, is_stylegan=False)
         if self.MODEL.info_type in ["continuous", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[1]), grad=False, num_freeze_layers=-1, is_stylegan=False)
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[2]), grad=False, num_freeze_layers=-1, is_stylegan=False)
+        
         if self.DDP*self.RUN.mixed_precision*self.RUN.synchronized_bn == 0: self.Gen.apply(misc.untrack_bn_statistics)
         # sample real images and labels from the true data distribution
         real_image_basket, real_label_basket = self.sample_data_basket()
@@ -296,12 +299,14 @@ class WORKER(object):
                                                             self.OPTIMIZATION.batch_size),
                                                             device=self.local_rank)
 
+                    loss_dict = {}
                     # calculate adversarial loss defined by "LOSS.adv_loss"
                     if self.LOSS.adv_loss == "MH":
                         dis_acml_loss = self.LOSS.d_loss(DDP=self.DDP, **real_dict)
                         dis_acml_loss += self.LOSS.d_loss(fake_dict["adv_output"], self.lossy, DDP=self.DDP)
                     else:
                         dis_acml_loss = self.LOSS.d_loss(real_dict["adv_output"], fake_dict["adv_output"], DDP=self.DDP)
+                    loss_dict['d_loss'] = dis_acml_loss.item()
 
                     # calculate class conditioning loss defined by "MODEL.d_cond_mtd"
                     if self.MODEL.d_cond_mtd in self.MISC.classifier_based_GAN:
@@ -310,17 +315,22 @@ class WORKER(object):
                         if self.MODEL.aux_cls_type == "TAC":
                             tac_dis_loss = self.cond_loss_mi(**fake_dict)
                             dis_acml_loss += self.LOSS.tac_dis_lambda * tac_dis_loss
+                            loss_dict['tac_dis_loss'] = tac_dis_loss.item()
                         elif self.MODEL.aux_cls_type == "ADC":
                             fake_cond_loss = self.cond_loss(**fake_dict)
                             dis_acml_loss += self.LOSS.cond_lambda * fake_cond_loss
+                            loss_dict['fake_cond_loss'] = fake_cond_loss.item()
                         else:
                             pass
+                        loss_dict['real_cond_loss'] = real_cond_loss.item()
                     else:
                         real_cond_loss = "N/A"
+                    
 
                     # add transport cost for latent optimization training
                     if self.LOSS.apply_lo:
                         dis_acml_loss += self.LOSS.lo_lambda * trsp_cost
+                        loss_dict['trsp_cost'] = trsp_cost.item()
 
                     # if LOSS.apply_cr is True, force the adv. and cls. logits to be the same
                     if self.LOSS.apply_cr:
@@ -334,6 +344,7 @@ class WORKER(object):
                         else:
                             pass
                         dis_acml_loss += self.LOSS.cr_lambda * real_consist_loss
+                        loss_dict['real_consist_loss'] = real_consist_loss.item()
 
                     # if LOSS.apply_bcr is True, apply balanced consistency regularization proposed in ICRGAN
                     if self.LOSS.apply_bcr:
@@ -352,6 +363,8 @@ class WORKER(object):
                         else:
                             pass
                         dis_acml_loss += self.LOSS.real_lambda * real_bcr_loss + self.LOSS.fake_lambda * fake_bcr_loss
+                        loss_dict['real_bcr_loss'] = real_bcr_loss.item()
+                        loss_dict['fake_bcr_loss'] = fake_bcr_loss.item()
 
                     # if LOSS.apply_zcr is True, apply latent consistency regularization proposed in ICRGAN
                     if self.LOSS.apply_zcr:
@@ -364,6 +377,7 @@ class WORKER(object):
                         else:
                             pass
                         dis_acml_loss += self.LOSS.d_lambda * fake_zcr_loss
+                        loss_dict['fake_zcr_loss'] = fake_zcr_loss.item()
 
                     # apply gradient penalty regularization to train wasserstein GAN
                     if self.LOSS.apply_gp:
@@ -373,6 +387,7 @@ class WORKER(object):
                                                           discriminator=self.Dis,
                                                           device=self.local_rank)
                         dis_acml_loss += self.LOSS.gp_lambda * gp_loss
+                        loss_dict['gp_loss'] = gp_loss.item()
 
                     # apply deep regret analysis regularization to train wasserstein GAN
                     if self.LOSS.apply_dra:
@@ -381,6 +396,7 @@ class WORKER(object):
                                                           discriminator=self.Dis,
                                                           device=self.local_rank)
                         dis_acml_loss += self.LOSS.dra_lambda * dra_loss
+                        loss_dict['dra_loss'] = dra_loss.item()
 
                     # apply max gradient penalty regularization to train Lipschitz GAN
                     if self.LOSS.apply_maxgp:
@@ -390,6 +406,7 @@ class WORKER(object):
                                                                 discriminator=self.Dis,
                                                                 device=self.local_rank)
                         dis_acml_loss += self.LOSS.maxgp_lambda * maxgp_loss
+                        loss_dict['maxgp_loss'] = maxgp_loss.item()
 
                     # apply LeCam reg. for data-efficient training if self.LOSS.apply_lecam is set to True
                     if self.LOSS.apply_lecam:
@@ -405,11 +422,13 @@ class WORKER(object):
                         else:
                             lecam_loss = torch.tensor(0., device=self.local_rank)
                         dis_acml_loss += self.LOSS.lecam_lambda*lecam_loss
+                        loss_dict['lecam_loss'] = lecam_loss.item()
 
                     # apply r1_reg inside of training loop
                     if self.LOSS.apply_r1_reg and not self.is_stylegan:
                         self.r1_penalty = losses.cal_r1_reg(adv_output=real_dict["adv_output"], images=real_images, device=self.local_rank)
                         dis_acml_loss += self.LOSS.r1_lambda*self.r1_penalty
+                        #loss_dict['r1_penalty'] = self.r1_penalty.item()
                     elif self.LOSS.apply_r1_reg and self.LOSS.r1_place == "inside_loop" and \
                         (self.OPTIMIZATION.d_updates_per_step*current_step + step_index) % self.STYLEGAN.d_reg_interval == 0:
                         real_images.requires_grad_(True)
@@ -425,8 +444,10 @@ class WORKER(object):
                                                                 self.OPTIMIZATION.batch_size),
                                                                 device=self.local_rank)
 
+                    loss_dict['dis_acml_loss'] = dis_acml_loss.item()
                     # adjust gradients for applying gradient accumluation trick
                     dis_acml_loss = dis_acml_loss / self.OPTIMIZATION.acml_steps
+                    
                     batch_counter += 1
 
                 # accumulate gradients of the discriminator
@@ -494,7 +515,8 @@ class WORKER(object):
         # empty cache to discard used memory
         if self.RUN.empty_cache:
             torch.cuda.empty_cache()
-        return real_cond_loss, dis_acml_loss
+        #return real_cond_loss, dis_acml_loss
+        return loss_dict
 
     # -----------------------------------------------------------------------------
     # train Generator
@@ -505,11 +527,20 @@ class WORKER(object):
         # toggle gradients of the generator and discriminator
         misc.toggle_grad(model=self.Dis, grad=False, num_freeze_layers=-1, is_stylegan=self.is_stylegan)
         misc.toggle_grad(model=self.Gen, grad=True, num_freeze_layers=-1, is_stylegan=self.is_stylegan)
+        #"""
         if self.MODEL.info_type in ["discrete", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[0]), grad=True, num_freeze_layers=-1, is_stylegan=False)
         if self.MODEL.info_type in ["continuous", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[1]), grad=True, num_freeze_layers=-1, is_stylegan=False)
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[2]), grad=True, num_freeze_layers=-1, is_stylegan=False)
+        #"""
+        # Update info head only in the alternate step
+        if self.MODEL.info_type in ["discrete", "both"]:
+            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[0]), grad=False, num_freeze_layers=-1, is_stylegan=False)
+        if self.MODEL.info_type in ["continuous", "both"]:
+            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[1]), grad=False, num_freeze_layers=-1, is_stylegan=False)
+            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[2]), grad=False, num_freeze_layers=-1, is_stylegan=False)
+
         self.Gen.apply(misc.track_bn_statistics)
         for step_index in range(self.OPTIMIZATION.g_updates_per_step):
             self.OPTIMIZATION.g_optimizer.zero_grad()
@@ -565,23 +596,29 @@ class WORKER(object):
                     if self.LOSS.apply_topk:
                         fake_dict["adv_output"] = torch.topk(fake_dict["adv_output"], int(self.topk)).values
 
+                    loss_dict = {}
                     # calculate adversarial loss defined by "LOSS.adv_loss"
                     if self.LOSS.adv_loss == "MH":
                         gen_acml_loss = self.LOSS.mh_lambda * self.LOSS.g_loss(DDP=self.DDP, **fake_dict, )
                     else:
                         gen_acml_loss = self.LOSS.g_loss(fake_dict["adv_output"], DDP=self.DDP)
+                    loss_dict['g_loss'] = gen_acml_loss.item()
 
                     # calculate class conditioning loss defined by "MODEL.d_cond_mtd"
                     if self.MODEL.d_cond_mtd in self.MISC.classifier_based_GAN:
                         fake_cond_loss = self.cond_loss(**fake_dict)
                         gen_acml_loss += self.LOSS.cond_lambda * fake_cond_loss
+                        loss_dict['fake_cond_loss'] = fake_cond_loss.item()
+
                         if self.MODEL.aux_cls_type == "TAC":
                             tac_gen_loss = -self.cond_loss_mi(**fake_dict)
                             gen_acml_loss += self.LOSS.tac_gen_lambda * tac_gen_loss
+                            loss_dict['tac_gen_loss'] = tac_gen_loss.item()
                         elif self.MODEL.aux_cls_type == "ADC":
                             adc_fake_dict = self.Dis(fake_images_, fake_labels, adc_fake=self.adc_fake)
                             adc_fake_cond_loss = -self.cond_loss(**adc_fake_dict)
                             gen_acml_loss += self.LOSS.cond_lambda * adc_fake_cond_loss
+                            loss_dict['adc_fake_cond_loss'] = adc_fake_cond_loss.item()
                         pass
 
                     # apply feature matching regularization to stabilize adversarial dynamics
@@ -594,6 +631,7 @@ class WORKER(object):
 
                         mean_match_loss = self.fm_loss(real_dict["h"].detach(), fake_dict["h"])
                         gen_acml_loss += self.LOSS.fm_lambda * mean_match_loss
+                        loss_dict['mean_match_loss'] = mean_match_loss.item()
 
                     # add transport cost for latent optimization training
                     if self.LOSS.apply_lo:
@@ -613,12 +651,17 @@ class WORKER(object):
                                 fake_dict["info_discrete_c_logits"][:, info_c*dim: dim*(info_c+1)],
                                 info_discrete_c[:, info_c: info_c+1].squeeze())
                         gen_acml_loss += self.LOSS.infoGAN_loss_discrete_lambda*self.info_discrete_loss + misc.enable_allreduce(fake_dict)
+                        loss_dict['info_discrete_loss'] = self.info_discrete_loss.item()
+
                     if self.MODEL.info_type in ["continuous", "both"]:
                         self.info_conti_loss = losses.normal_nll_loss(info_conti_c, fake_dict["info_conti_mu"], fake_dict["info_conti_var"])
                         gen_acml_loss += self.LOSS.infoGAN_loss_conti_lambda*self.info_conti_loss + misc.enable_allreduce(fake_dict)
+                        loss_dict['info_conti_loss'] = self.info_conti_loss.item()
 
                     # adjust gradients for applying gradient accumluation trick
+                    loss_dict['gen_acml_loss'] = gen_acml_loss.item()
                     gen_acml_loss = gen_acml_loss / self.OPTIMIZATION.acml_steps
+
 
                 # accumulate gradients of the generator
                 if self.RUN.mixed_precision and not self.is_stylegan:
@@ -678,24 +721,30 @@ class WORKER(object):
         # empty cache to discard used memory
         if self.RUN.empty_cache:
             torch.cuda.empty_cache()
-        return gen_acml_loss
-
+        #return gen_acml_loss
+        return loss_dict
+    
+    
     # -----------------------------------------------------------------------------
     # log training statistics
     # -----------------------------------------------------------------------------
-    def log_train_statistics(self, current_step, real_cond_loss, gen_acml_loss, dis_acml_loss):
+    def log_train_statistics(self, current_step, gen_loss_dict, dis_loss_dict): #real_cond_loss, gen_acml_loss, dis_acml_loss):
         self.wandb_step = current_step + 1
-        if self.MODEL.d_cond_mtd in self.MISC.classifier_based_GAN:
-            cls_loss = real_cond_loss.item()
+        if self.MODEL.d_cond_mtd in self.MISC.classifier_based_GAN and 'real_cond_loss' in dis_loss_dict:
+            #cls_loss = real_cond_loss.item()
+            cls_loss = dis_loss_dict['real_cond_loss']
         else:
             cls_loss = "N/A"
+
+        gen_acml_loss = gen_loss_dict['gen_acml_loss']
+        dis_acml_loss = dis_loss_dict['dis_acml_loss']
 
         log_message = LOG_FORMAT.format(
             step=current_step + 1,
             progress=(current_step + 1) / self.OPTIMIZATION.total_steps,
             elapsed=misc.elapsed_time(self.start_time),
-            gen_loss=gen_acml_loss.item(),
-            dis_loss=dis_acml_loss.item(),
+            gen_loss=gen_acml_loss, #gen_acml_loss.item(),
+            dis_loss=dis_acml_loss, #dis_acml_loss.item(),
             cls_loss=cls_loss,
             topk=int(self.topk) if self.LOSS.apply_topk else "N/A",
             aa_p=self.aa_p if self.AUG.apply_ada or self.AUG.apply_apa else "N/A",
@@ -704,12 +753,14 @@ class WORKER(object):
 
         # save loss values in wandb event file and .npz format
         loss_dict = {
-            "gen_loss": gen_acml_loss.item(),
-            "dis_loss": dis_acml_loss.item(),
+            "gen_loss": gen_acml_loss,  #.item(),
+            "dis_loss": dis_acml_loss,  #.item(),
             "cls_loss": 0.0 if cls_loss == "N/A" else cls_loss,
         }
+        log_loss_dict = dis_loss_dict | gen_loss_dict
 
-        wandb.log(loss_dict, step=self.wandb_step)
+        wandb.log(log_loss_dict, step=self.wandb_step)
+        #wandb.log(loss_dict, step=self.wandb_step)
 
         save_dict = misc.accm_values_convert_dict(list_dict=self.loss_list_dict,
                                                   value_dict=loss_dict,
@@ -732,6 +783,7 @@ class WORKER(object):
         infoGAN_dict = {}
         if self.MODEL.info_type in ["discrete", "both"]:
             infoGAN_dict["info_discrete_loss"] = self.info_discrete_loss.item()
+            wandb.log(infoGAN_dict, step=self.wandb_step)
         if self.MODEL.info_type in ["continuous", "both"]:
             infoGAN_dict["info_conti_loss"] = self.info_conti_loss.item()
             wandb.log(infoGAN_dict, step=self.wandb_step)
@@ -795,8 +847,9 @@ class WORKER(object):
                              logging=self.global_rank == 0 and self.logger)
 
         if self.RUN.train:
-            wandb.log({"generated_images": wandb.Image(fake_images)}, step=self.wandb_step)
-
+            fake_images = torchvision.utils.make_grid(fake_images, normalize=True)    # Batch dim unsupported in wandb>=20.0
+            wandb.log({"generated_images": wandb.Image(fake_images)}, step=self.wandb_step)    
+ 
         misc.make_GAN_trainable(self.Gen, self.Gen_ema, self.Dis)
 
     # -----------------------------------------------------------------------------
@@ -822,7 +875,8 @@ class WORKER(object):
                                                                    eval_model=self.eval_model,
                                                                    num_generate=self.num_eval[self.RUN.ref_dataset],
                                                                    y_sampler="totally_random",
-                                                                   batch_size=self.OPTIMIZATION.batch_size,
+                                                                   #batch_size=self.OPTIMIZATION.batch_size, # Consider using eval_batch_size to avoid OOM
+                                                                   batch_size=self.OPTIMIZATION.eval_batch_size,
                                                                    z_prior=self.MODEL.z_prior,
                                                                    truncation_factor=self.RUN.truncation_factor,
                                                                    z_dim=self.MODEL.z_dim,
@@ -867,6 +921,7 @@ class WORKER(object):
                             wandb.log({"{eval_model} Top5 acc".format(eval_model=self.RUN.eval_backbone): top5}, step=self.wandb_step)
 
             if "fid" in metrics:
+                #if self.global_rank == 0:
                 fid_score, m1, c1 = fid.calculate_fid(data_loader=self.eval_dataloader,
                                                       eval_model=self.eval_model,
                                                       num_generate=self.num_eval[self.RUN.ref_dataset],
@@ -1556,8 +1611,8 @@ class WORKER(object):
 
         for current_epoch in tqdm(range(epoch_trained, cas_setting["epochs"])):
             model.train()
-            optimizer.zero_grad()
-            ops.adjust_learning_rate(optimizer=optimizer,
+            #optimizer.zero_grad()
+            lr = ops.adjust_learning_rate(optimizer=optimizer,
                                      lr_org=cas_setting["lr"],
                                      epoch=current_epoch,
                                      total_epoch=cas_setting["epochs"],
@@ -1598,9 +1653,14 @@ class WORKER(object):
                 train_top1_acc.update(train_acc1.item(), images.size(0))
                 train_top5_acc.update(train_acc5.item(), images.size(0))
 
+                optimizer.zero_grad()   # Moved from outer-loop
                 ce_loss.backward()
                 optimizer.step()
-
+            
+            if self.local_rank == 0:
+                self.logger.info("Current lr: {lr:.5f}, train loss: {loss:.4f}, accuracy: Top-1: {top1:.4f}% and Top-5 {top5:.4f}%".format(
+                    lr=lr, loss=train_loss.avg, top1=train_top1_acc.avg, top5=train_top5_acc.avg))
+            
             valid_acc1, valid_acc5, valid_loss = self.validate_classifier(model=model,
                                                                           generator=generator,
                                                                           generator_mapping=generator_mapping,
@@ -1616,10 +1676,14 @@ class WORKER(object):
                 model_ = misc.peel_model(model)
                 states = {"state_dict": model_.state_dict(), "optimizer": optimizer.state_dict(), "epoch": current_epoch+1,
                           "best_top1": best_top1, "best_top5": best_top5, "best_epoch": best_epoch}
+                if GAN_train:
+                    mode = "fake_trained"
+                else:
+                    mode = "real_trained"
                 misc.save_model_c(states, mode, self.RUN)
 
             if self.local_rank == 0:
-                self.logger.info("Current best accuracy: Top-1: {top1:.4f}% and Top-5 {top5:.4f}%".format(top1=best_top1, top5=best_top5))
+                self.logger.info("Current best val accuracy: Top-1: {top1:.4f}% and Top-5 {top5:.4f}%".format(top1=best_top1, top5=best_top5))
                 self.logger.info("Save model to {}".format(self.RUN.ckpt_dir))
 
     # -----------------------------------------------------------------------------
@@ -1657,12 +1721,12 @@ class WORKER(object):
             ce_loss = self.ce_loss(output, labels)
 
             valid_acc1, valid_acc5 = misc.accuracy(output.data, labels, topk=(1, 5))
-
             valid_loss.update(ce_loss.item(), images.size(0))
             valid_top1_acc.update(valid_acc1.item(), images.size(0))
             valid_top5_acc.update(valid_acc5.item(), images.size(0))
 
         if self.local_rank == 0:
-            self.logger.info("Top 1-acc {top1.val:.4f} ({top1.avg:.4f})\t"
-                             "Top 5-acc {top5.val:.4f} ({top5.avg:.4f})".format(top1=valid_top1_acc, top5=valid_top5_acc))
+            self.logger.info("validation loss {loss.val:.4f} ({loss.avg:.4f})\t"
+                             "Top 1-acc {top1.val:.4f} ({top1.avg:.4f})\t"
+                             "Top 5-acc {top5.val:.4f} ({top5.avg:.4f})".format(loss=valid_loss, top1=valid_top1_acc, top5=valid_top5_acc))
         return valid_top1_acc.avg, valid_top5_acc.avg, valid_loss.avg

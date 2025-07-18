@@ -38,7 +38,7 @@ def load_configs_initialize_training():
 
     parser.add_argument("--seed", type=int, default=-1, help="seed for generating random numbers")
     parser.add_argument("-DDP", "--distributed_data_parallel", action="store_true")
-    parser.add_argument("--backend", type=str, default="nccl", help="cuda backend for DDP training \in ['nccl', 'gloo']")
+    parser.add_argument("--backend", type=str, default="nccl", help="cuda backend for DDP training in ['nccl', 'gloo']")
     parser.add_argument("-tn", "--total_nodes", default=1, type=int, help="total number of nodes for training")
     parser.add_argument("-cn", "--current_node", default=0, type=int, help="rank of the current node")
     parser.add_argument("--num_workers", type=int, default=8)
@@ -63,7 +63,7 @@ def load_configs_initialize_training():
     parser.add_argument("-lgv", "--langevin_sampling", action="store_true",
                         help="apply langevin sampling to generate images from a Energy-Based Model")
     parser.add_argument("-lgv_rate", "--langevin_rate", type=float, default=-1,
-                        help="an initial update rate for langevin sampling (\epsilon)")
+                        help="an initial update rate for langevin sampling (epsilon)")
     parser.add_argument("-lgv_std", "--langevin_noise_std", type=float, default=-1,
                         help="standard deviation of a gaussian noise used in langevin sampling (std of n_i)")
     parser.add_argument("-lgv_decay", "--langevin_decay", type=float, default=-1,
@@ -77,7 +77,7 @@ def load_configs_initialize_training():
     parser.add_argument("-l", "--load_data_in_memory", action="store_true", help="put the whole train dataset on the main memory for fast I/O")
     parser.add_argument("-metrics", "--eval_metrics", nargs='+', default=['fid'],
                         help="evaluation metrics to use during training, a subset list of ['fid', 'is', 'prdc'] or none")
-    parser.add_argument("--pre_resizer", type=str, default="wo_resize", help="which resizer will you use to pre-process images\
+    parser.add_argument("--pre_resizer", type=str, default="lanczos", help="which resizer will you use to pre-process images\
                         in ['wo_resize', 'nearest', 'bilinear', 'bicubic', 'lanczos']")
     parser.add_argument("--post_resizer", type=str, default="legacy", help="which resizer will you use to evaluate GANs\
                         in ['legacy', 'clean', 'friendly']")
@@ -185,6 +185,7 @@ if __name__ == "__main__":
                                                 hdf5_path),
                                           nprocs=gpus_per_node,
                                           join=False)
+        #misc.cleanup()  # Destroy DDP process groups
         ctx.join()
         for process in ctx.processes:
             process.kill()

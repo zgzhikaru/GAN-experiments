@@ -337,7 +337,9 @@ class Discriminator(nn.Module):
         # Q head network for infoGAN
         if self.MODEL.info_type in ["discrete", "both"]:
             out_features = self.MODEL.info_num_discrete_c*self.MODEL.info_dim_discrete_c
-            self.info_discrete_linear = MODULES.d_linear(in_features=self.out_dims[-1], out_features=out_features, bias=False)
+            use_bias = False if self.normalize_d_embed else True
+            self.info_discrete_linear = MODULES.d_linear(in_features=self.out_dims[-1], out_features=out_features, bias=use_bias)
+            #self.info_discrete_linear = MODULES.d_linear(in_features=self.out_dims[-1], out_features=out_features, bias=False)
         if self.MODEL.info_type in ["continuous", "both"]:
             out_features = self.MODEL.info_num_conti_c
             self.info_conti_mu_linear = MODULES.d_linear(in_features=self.out_dims[-1], out_features=out_features, bias=False)
@@ -371,9 +373,15 @@ class Discriminator(nn.Module):
 
             # forward pass through InfoGAN Q head
             if self.MODEL.info_type in ["discrete", "both"]:
-                info_discrete_c_logits = self.info_discrete_linear(h/(bottom_h*bottom_w))
+                #info_discrete_c_logits = self.info_discrete_linear(h/(bottom_h*bottom_w))
+                if self.normalize_d_embed:
+                    for W in self.info_discrete_linear.parameters():
+                        W = F.normalize(W, dim=1)
+                    h = F.normalize(h, dim=1)
+                info_discrete_c_logits = self.info_discrete_linear(h)
+                
             if self.MODEL.info_type in ["continuous", "both"]:
-                info_conti_mu = self.info_conti_mu_linear(h/(bottom_h*bottom_w))
+                info_conti_mu = self.info_conti_mu_linear(h/(bottom_h*bottom_w))        # TODO: Remove filter feature-map averaging for consistency
                 info_conti_var = torch.exp(self.info_conti_var_linear(h/(bottom_h*bottom_w)))
 
             # class conditioning

@@ -23,10 +23,10 @@ MODEL:
 LOSS:
   adv_loss: "hinge"
 OPTIMIZATION:
-  batch_size: 64
+  batch_size: 256
   g_lr: 0.0002
   d_lr: 0.0002
   beta1: 0.5
   beta2: 0.999
-  d_updates_per_step: 5
+  d_updates_per_step: 1
   total_steps: 100000

@@ -18,6 +18,7 @@ from os.path import dirname, abspath, exists, join
 import math
 import os
 import shutil
+import time
 
 from torch.nn import DataParallel
 from torch.nn.parallel import DistributedDataParallel
@@ -46,7 +47,7 @@ def frechet_inception_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     diff = mu1 - mu2
 
     # Product might be almost singular
-    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)    
     if not np.isfinite(covmean).all():
         offset = np.eye(sigma1.shape[0]) * eps
         covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
@@ -63,7 +64,7 @@ def frechet_inception_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
 
 def calculate_moments(data_loader, eval_model, num_generate, batch_size, quantize, world_size,
-                      DDP, disable_tqdm, fake_feats=None):
+                      DDP, disable_tqdm, fake_feats=None, max_instance=1300000):
     if fake_feats is not None:
         total_instance = num_generate
         acts = fake_feats.detach().cpu().numpy()[:num_generate]
@@ -71,27 +72,46 @@ def calculate_moments(data_loader, eval_model, num_generate, batch_size, quantiz
         eval_model.eval()
         total_instance = len(data_loader.dataset)
         data_iter = iter(data_loader)
-        num_batches = math.ceil(float(total_instance) / float(batch_size))
-        if DDP: num_batches = int(math.ceil(float(total_instance) / float(batch_size*world_size)))
 
-        acts = []
-        for i in tqdm(range(0, num_batches), disable=disable_tqdm):
-            start = i * batch_size
-            end = start + batch_size
-            try:
-                images, labels = next(data_iter)
-            except StopIteration:
-                break
+        def compute_features(num_batches):
+            acts = []
+            for i in tqdm(range(0, num_batches), disable=disable_tqdm):
+                start = i * batch_size
+                end = start + batch_size
+                try:
+                    images, labels = next(data_iter)
+                except StopIteration:
+                    break
 
-            images, labels = images.to("cuda"), labels.to("cuda")
+                images, labels = images.to("cuda"), labels.to("cuda")
 
-            with torch.no_grad():
-                embeddings, logits = eval_model.get_outputs(images, quantize=quantize)
-                acts.append(embeddings)
+                with torch.no_grad():
+                    embeddings, logits = eval_model.get_outputs(images, quantize=quantize)
+                    acts.append(embeddings)
+                    #acts.append(embeddings.cpu())   # Prevent OOM on single GPU; May not work on DDP
 
-        acts = torch.cat(acts, dim=0)
-        if DDP: acts = torch.cat(losses.GatherLayer.apply(acts), dim=0)
-        acts = acts.detach().cpu().numpy()[:total_instance].astype(np.float64)
+            acts = torch.cat(acts, dim=0)
+            if DDP: acts = torch.cat(losses.GatherLayer.apply(acts), dim=0)
+            return acts.detach().cpu().numpy()[:total_instance].astype(np.float64)
+        
+        # Split dataset into chunk to avoid OOM
+        if total_instance > max_instance:
+            num_passes = math.ceil(float(total_instance) / float(max_instance))
+            num_batches = math.floor(float(max_instance) / float(batch_size))
+            if DDP:
+                num_batches = int(math.floor(float(max_instance) / float(batch_size * world_size)))
+
+            act_set = []
+            for k in range(num_passes):
+                acts = compute_features(num_batches)
+                act_set.append(acts)
+            acts = np.vstack(act_set)
+        else:
+            num_batches = math.ceil(float(total_instance) / float(batch_size))
+            if DDP:
+                num_batches = int(math.ceil(float(total_instance) / float(batch_size * world_size)))
+
+            acts = compute_features(num_batches)
 
     mu = np.mean(acts, axis=0)
     sigma = np.cov(acts, rowvar=False)
@@ -115,7 +135,8 @@ def calculate_fid(data_loader,
         m1, s1 = calculate_moments(data_loader=data_loader,
                                    eval_model=eval_model,
                                    num_generate="N/A",
-                                   batch_size=cfgs.OPTIMIZATION.batch_size,
+                                   batch_size=cfgs.OPTIMIZATION.eval_batch_size,
+                                   #batch_size=cfgs.OPTIMIZATION.batch_size,
                                    quantize=quantize,
                                    world_size=cfgs.OPTIMIZATION.world_size,
                                    DDP=cfgs.RUN.distributed_data_parallel,
@@ -125,12 +146,15 @@ def calculate_fid(data_loader,
     m2, s2 = calculate_moments(data_loader="N/A",
                                eval_model=eval_model,
                                num_generate=num_generate,
-                               batch_size=cfgs.OPTIMIZATION.batch_size,
+                               batch_size=cfgs.OPTIMIZATION.eval_batch_size,
+                               #batch_size=cfgs.OPTIMIZATION.batch_size,
                                quantize=quantize,
                                world_size=cfgs.OPTIMIZATION.world_size,
                                DDP=cfgs.RUN.distributed_data_parallel,
                                disable_tqdm=disable_tqdm,
                                fake_feats=fake_feats)
-
+    if disable_tqdm:    # Avoid subranks from computing fid to save cpu loads
+        return -1.0, m1, s1
+    
     fid_value = frechet_inception_distance(m1, s1, m2, s2)
     return fid_value, m1, s1

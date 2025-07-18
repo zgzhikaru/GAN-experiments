@@ -90,7 +90,8 @@ def load_worker(local_rank, cfgs, gpus_per_node, run_name, hdf5_path):
     # -----------------------------------------------------------------------------
     if cfgs.RUN.distributed_data_parallel:
         global_rank = cfgs.RUN.current_node * (gpus_per_node) + local_rank
-        print("Use GPU: {global_rank} for training.".format(global_rank=global_rank))
+        print("Use GPU: {global_rank} ({device_name}) for training.".format(
+            global_rank=global_rank, device_name=torch.cuda.get_device_name(local_rank)))
         misc.setup(global_rank, cfgs.OPTIMIZATION.world_size, cfgs.RUN.backend)
         torch.cuda.set_device(local_rank)
     else:
@@ -196,7 +197,8 @@ def load_worker(local_rank, cfgs, gpus_per_node, run_name, hdf5_path):
 
     if load_eval_dataset:
         eval_dataloader = DataLoader(dataset=eval_dataset,
-                                     batch_size=cfgs.OPTIMIZATION.batch_size,
+                                     #batch_size=cfgs.OPTIMIZATION.batch_size,
+                                     batch_size=cfgs.OPTIMIZATION.eval_batch_size,
                                      shuffle=False,
                                      pin_memory=True,
                                      num_workers=cfgs.RUN.num_workers,
@@ -297,6 +299,7 @@ def load_worker(local_rank, cfgs, gpus_per_node, run_name, hdf5_path):
         else:
             num_eval["train"], num_eval["valid"], num_eval["test"] = 50000, 50000, 50000
 
+
     if len(cfgs.RUN.eval_metrics) or cfgs.RUN.intra_class_fid:
         eval_model = pp.LoadEvalModel(eval_backbone=cfgs.RUN.eval_backbone,
                                       post_resizer=cfgs.RUN.post_resizer,
@@ -391,17 +394,21 @@ def load_worker(local_rank, cfgs, gpus_per_node, run_name, hdf5_path):
         worker.prepare_train_iter(epoch_counter=epoch)
         while step <= cfgs.OPTIMIZATION.total_steps:
             if cfgs.OPTIMIZATION.d_first:
-                real_cond_loss, dis_acml_loss = worker.train_discriminator(current_step=step)
-                gen_acml_loss = worker.train_generator(current_step=step)
+                dis_loss_dict = worker.train_discriminator(current_step=step)
+                gen_loss_dict = worker.train_generator(current_step=step)
+                
             else:
-                gen_acml_loss = worker.train_generator(current_step=step)
-                real_cond_loss, dis_acml_loss = worker.train_discriminator(current_step=step)
+                gen_loss_dict = worker.train_generator(current_step=step)
+                dis_loss_dict = worker.train_discriminator(current_step=step)
+
 
             if global_rank == 0 and (step + 1) % cfgs.RUN.print_freq == 0:
                 worker.log_train_statistics(current_step=step,
-                                            real_cond_loss=real_cond_loss,
-                                            gen_acml_loss=gen_acml_loss,
-                                            dis_acml_loss=dis_acml_loss)
+                                            #real_cond_loss=real_cond_loss,
+                                            gen_loss_dict=gen_loss_dict, 
+                                            #gen_acml_loss=gen_acml_loss,
+                                            #dis_acml_loss=dis_acml_loss)
+                                            dis_loss_dict=dis_loss_dict)
             step += 1
 
             if cfgs.LOSS.apply_topk:
@@ -510,3 +517,8 @@ def load_worker(local_rank, cfgs, gpus_per_node, run_name, hdf5_path):
 
     if global_rank == 0:
         wandb.finish()
+
+    # Prevent subranks from terminating before the main rank finishes
+    if cfgs.RUN.distributed_data_parallel:
+        dist.barrier(worker.group)
+        dist.destroy_process_group()
