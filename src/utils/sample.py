@@ -39,10 +39,6 @@ def sample_normal(batch_size, z_dim, truncation_factor, device):
         raise ValueError("truncated_factor must be positive.")
     return latents
 
-def sample_info(info_sampler, batch_size, info_dim_discrete_c):
-    if info_sampler == "totally_random":
-        info_discrete_c = torch.randint(info_dim_discrete_c,(batch_size, MODEL.info_num_discrete_c), device=device)
-
 
 def sample_y(y_sampler, batch_size, num_classes, device):
     if y_sampler == "totally_random":
