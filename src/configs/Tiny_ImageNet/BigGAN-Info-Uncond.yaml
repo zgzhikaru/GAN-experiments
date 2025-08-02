@@ -1,7 +1,7 @@
 DATA:
-  name: "CIFAR10"
-  img_size: 32
-  num_classes: 10
+  name: "Tiny_ImageNet"
+  img_size: 64
+  num_classes: 200
 MODEL:
   backbone: "big_resnet"
   g_cond_mtd: "W/O"
@@ -9,15 +9,15 @@ MODEL:
   apply_g_sn: True
   apply_d_sn: True
   apply_attn: True
-  attn_g_loc: [2]
+  attn_g_loc: [3]
   attn_d_loc: [1]
-  z_dim: 80
+  z_dim: 100
   g_shared_dim: 128
-  g_conv_dim: 96
-  d_conv_dim: 96
+  g_conv_dim: 80
+  d_conv_dim: 80
   apply_g_ema: True
   g_ema_decay: 0.9999
-  g_ema_start: 1000
+  g_ema_start: 20000
   info_type: "discrete"
   g_info_injection: "cBN"
   info_num_discrete_c: 1
@@ -26,11 +26,10 @@ LOSS:
   adv_loss: "hinge"
   infoGAN_loss_discrete_lambda: 1.0
 OPTIMIZATION:
-  batch_size: 64
-  g_lr: 0.0002
+  batch_size: 256
+  g_lr: 0.0001
   d_lr: 0.0002
-  i_lr: 0.001
-  beta1: 0.5
+  beta1: 0.0
   beta2: 0.999
-  d_updates_per_step: 5
-  total_steps: 100000
+  d_updates_per_step: 1
+  

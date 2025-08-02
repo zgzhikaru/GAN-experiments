@@ -392,7 +392,9 @@ class Discriminator(nn.Module):
                     h = F.normalize(h, dim=1)
                 cls_output = self.linear2(h)
             elif self.d_cond_mtd == "PD":
-                adv_output = adv_output + torch.sum(torch.mul(self.embedding(label), h), 1)
+                #adv_output = adv_output + torch.sum(torch.mul(self.embedding(label), h), 1)
+                cls_output = torch.sum(torch.mul(self.embedding(label), h), 1)
+                adv_output = adv_output + cls_output
             elif self.d_cond_mtd in ["2C", "D2DCE"]:
                 embed = self.linear2(h)
                 proxy = self.embedding(label)

@@ -527,19 +527,12 @@ class WORKER(object):
         # toggle gradients of the generator and discriminator
         misc.toggle_grad(model=self.Dis, grad=False, num_freeze_layers=-1, is_stylegan=self.is_stylegan)
         misc.toggle_grad(model=self.Gen, grad=True, num_freeze_layers=-1, is_stylegan=self.is_stylegan)
-        #"""
+        # toggle gradients for info-head parameters
         if self.MODEL.info_type in ["discrete", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[0]), grad=True, num_freeze_layers=-1, is_stylegan=False)
         if self.MODEL.info_type in ["continuous", "both"]:
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[1]), grad=True, num_freeze_layers=-1, is_stylegan=False)
             misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[2]), grad=True, num_freeze_layers=-1, is_stylegan=False)
-        #"""
-        # Update info head only in the alternate step
-        if self.MODEL.info_type in ["discrete", "both"]:
-            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[0]), grad=False, num_freeze_layers=-1, is_stylegan=False)
-        if self.MODEL.info_type in ["continuous", "both"]:
-            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[1]), grad=False, num_freeze_layers=-1, is_stylegan=False)
-            misc.toggle_grad(getattr(misc.peel_model(self.Dis), self.MISC.info_params[2]), grad=False, num_freeze_layers=-1, is_stylegan=False)
 
         self.Gen.apply(misc.track_bn_statistics)
         for step_index in range(self.OPTIMIZATION.g_updates_per_step):
@@ -724,7 +717,7 @@ class WORKER(object):
         #return gen_acml_loss
         return loss_dict
     
-    
+
     # -----------------------------------------------------------------------------
     # log training statistics
     # -----------------------------------------------------------------------------
@@ -847,7 +840,9 @@ class WORKER(object):
                              logging=self.global_rank == 0 and self.logger)
 
         if self.RUN.train:
-            fake_images = torchvision.utils.make_grid(fake_images, normalize=True)    # Batch dim unsupported in wandb>=20.0
+            #normalized_images = ((fake_images+1)/2).clamp(0.0, 1.0)      # Normalize tanh output images to [0, 1] range
+            #fake_images = torchvision.utils.make_grid(normalized_images, normalize=True)
+            fake_images = torchvision.utils.make_grid(fake_images, normalize=True, value_range=(-1,1))    # Batch dim unsupported in wandb>=20.0
             wandb.log({"generated_images": wandb.Image(fake_images)}, step=self.wandb_step)    
  
         misc.make_GAN_trainable(self.Gen, self.Gen_ema, self.Dis)
@@ -1116,7 +1111,8 @@ class WORKER(object):
             misc.make_GAN_untrainable(self.Gen, self.Gen_ema, self.Dis)
             generator, generator_mapping, generator_synthesis = self.gen_ctlr.prepare_generator()
 
-            res, mean, std = 224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            #res, mean, std = 224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+            res, mean, std = 224, [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
             resizer = resize.build_resizer(resizer=self.RUN.post_resizer,
                                            backbone="ResNet50_torch",
                                            size=res)
@@ -1202,7 +1198,9 @@ class WORKER(object):
     # -----------------------------------------------------------------------------
     # conduct latent interpolation analysis to identify the quaility of latent space (Z)
     # -----------------------------------------------------------------------------
-    def run_linear_interpolation(self, num_rows, num_cols, fix_z, fix_y, num_saves=100):
+    def run_linear_interpolation(self, num_rows, num_cols, fix_z, fix_y, fix_p=True, 
+                                 #info_type, info_num_discrete_c, info_dim_discrete_c, info_num_conti_c, # TODO: Access info config from self.MODEL
+                                 num_saves=100):
         assert int(fix_z) * int(fix_y) != 1, "unable to switch fix_z and fix_y on together!"
         if self.global_rank == 0:
             flag = "fix_z" if fix_z else "fix_y"
@@ -1225,6 +1223,30 @@ class WORKER(object):
                     zs = misc.interpolate(torch.randn(num_rows, 1, self.MODEL.z_dim, device=self.local_rank),
                                           torch.randn(num_rows, 1, self.MODEL.z_dim, device=self.local_rank),
                                           num_cols - 2).view(-1, self.MODEL.z_dim)
+
+                # generate InfoGAN latent codes
+                info_discrete_c, info_conti_c = None, None
+                if self.MODEL.info_type in ["discrete", "both"]:
+                    if fix_p:
+                        #info_discrete_c = torch.randint(self.MODEL.info_dim_discrete_c,(num_rows, self.MODEL.info_num_discrete_c), device=self.local_rank)
+                        info_discrete_c = F.one_hot(info_discrete_c, self.MODEL.info_dim_discrete_c).view(num_rows, -1)
+                    else:
+                        info_discrete_c = misc.interpolate(
+                            sample.sample_onehot(num_rows, self.MODEL.info_dim_discrete_c).view(num_rows, 1, -1),
+                            sample.sample_onehot(num_rows, self.MODEL.info_dim_discrete_c).view(num_rows, 1, -1),
+                            num_cols - 2).view(num_rows * (num_cols), -1)
+                    # TODO: Check passing interpolated info_discrete_c instead of one-hot; Modify shared_label option
+                    #zs = torch.cat((zs, F.one_hot(info_discrete_c, self.MODEL.info_dim_discrete_c).view(num_rows, -1)), dim=1)
+                    zs = torch.cat((zs, info_discrete_c), dim=1)
+
+                if self.MODEL.info_type in ["continuous", "both"]:
+                    if fix_p:
+                        info_conti_c = torch.rand(num_rows, self.MODEL.info_num_conti_c, device=self.local_rank) * 2 - 1
+                    else:   # FIXME: z_dim -> info_num_conti_c
+                        info_conti_c = misc.interpolate(torch.randn(num_rows, 1, self.MODEL.info_num_conti_c, device=self.local_rank),
+                                          torch.randn(num_rows, 1, self.MODEL.info_num_conti_c, device=self.local_rank),
+                                          num_cols - 2).view(-1, self.MODEL.info_num_conti_c)
+                    zs = torch.cat((zs, info_conti_c), dim=1)
 
                 if fix_y:
                     ys = sample.sample_onehot(batch_size=num_rows,
@@ -1355,7 +1377,7 @@ class WORKER(object):
                     hook_handles.append(handle)
 
             tsne_iter = iter(dataloader)
-            num_batches = len(dataloader.dataset) // self.OPTIMIZATION.batch_size
+            num_batches = len(dataloader.dataset) // self.OPTIMIZATION.eval_batch_size   #self.OPTIMIZATION.batch_size
             for i in range(num_batches):
                 real_images, real_labels = next(tsne_iter)
                 real_images, real_labels = real_images.to(self.local_rank), real_labels.to(self.local_rank)
@@ -1373,7 +1395,7 @@ class WORKER(object):
 
                 fake_images, fake_labels, _, _, _, _, _ = sample.generate_images(z_prior=self.MODEL.z_prior,
                                                                            truncation_factor=self.RUN.truncation_factor,
-                                                                           batch_size=self.OPTIMIZATION.batch_size,
+                                                                           batch_size=self.OPTIMIZATION.eval_batch_size, #self.OPTIMIZATION.batch_size,
                                                                            z_dim=self.MODEL.z_dim,
                                                                            num_classes=self.DATA.num_classes,
                                                                            y_sampler="totally_random",

@@ -1,7 +1,7 @@
 DATA:
-  name: "Tiny_ImageNet"
+  name: "SUN397"
   img_size: 64
-  num_classes: 200
+  num_classes: 397
 MODEL:
   backbone: "big_resnet"
   g_cond_mtd: "cBN"

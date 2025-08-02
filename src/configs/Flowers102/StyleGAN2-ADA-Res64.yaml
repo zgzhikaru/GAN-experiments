@@ -1,7 +1,7 @@
 DATA:
-  name: "CUB200"
-  img_size: 128
-  num_classes: 200
+  name: "Flowers102"
+  img_size: 64
+  num_classes: 102
 MODEL:
   backbone: "stylegan2"
   g_cond_mtd: "cAdaIN"

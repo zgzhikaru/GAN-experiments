@@ -235,13 +235,13 @@ class Configurations(object):
         # learning rate for discriminator update
         self.OPTIMIZATION.d_lr = 0.0002
         # learning rate for info head update
-        self.OPTIMIZATION.i_lr = 0.0002
+        #self.OPTIMIZATION.i_lr = 0.0002
         # weight decay strength for the generator update
         self.OPTIMIZATION.g_weight_decay = 0.0
         # weight decay strength for the discriminator update
         self.OPTIMIZATION.d_weight_decay = 0.0
         # weight decay strength for the info head update
-        self.OPTIMIZATION.i_weight_decay = 0.0
+        #self.OPTIMIZATION.i_weight_decay = 0.0
         # momentum value for SGD and RMSprop optimizers
         self.OPTIMIZATION.momentum = "N/A"
         # nesterov value for SGD optimizer

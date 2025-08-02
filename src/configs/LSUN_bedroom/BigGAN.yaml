@@ -4,8 +4,8 @@ DATA:
   num_classes: 1
 MODEL:
   backbone: "big_resnet"
-  g_cond_mtd: "cBN"
-  d_cond_mtd: "PD"
+  g_cond_mtd: "W/O"
+  d_cond_mtd: "W/O"
   apply_g_sn: True
   apply_d_sn: True
   apply_attn: True
