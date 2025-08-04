@@ -86,6 +86,35 @@ def sample_zy(z_prior, batch_size, z_dim, num_classes, truncation_factor, y_samp
         zs_eps = None
     return zs, fake_labels, zs_eps
 
+def sample_info(info_type, batch_size, info_num_discrete_c, info_dim_discrete_c, info_num_conti_c, info_sampler, device):
+    # Generate info latents
+    info_discrete_c, info_conti_c = None, None
+    info_var_list = []
+    if info_type in ["discrete", "both"]:
+        #info_discrete_c = torch.randint(MODEL.info_dim_discrete_c,(batch_size, MODEL.info_num_discrete_c), device=device)
+        #zs = torch.cat((zs, F.one_hot(info_discrete_c, MODEL.info_dim_discrete_c).view(batch_size, -1)), dim=1)    
+
+        if info_num_discrete_c > 1:
+            info_discrete_list = []
+            # num_total_discrete_c = MODEL.info_num_discrete_c * MODEL.info_dim_discrete_c
+            # batch_size = num_total_discrete_c * num_col if 'ascending_all'
+            # TODO: Need to disentangle batch_size determination from sample_y, to visualize more than one discrete_latent
+            for c in range(info_num_discrete_c):    
+                info_discrete_list.append(sample_y(info_sampler, batch_size, info_dim_discrete_c, device))
+            info_discrete_c = torch.stack(info_discrete_list, dim=1)  # For returning as output
+        else:
+            info_discrete_c = sample_y(info_sampler, batch_size, info_dim_discrete_c, device)
+        
+        batch_size = info_discrete_c.shape[0]   # This affects batch_size in following uses; Determined in sample_y
+
+        info_var_list.append(F.one_hot(info_discrete_c, info_dim_discrete_c).view(batch_size, -1))
+
+    if info_type in ["continuous", "both"]:
+        info_conti_c = torch.rand(batch_size, info_num_conti_c, device=device) * 2 - 1
+        info_var_list.append(info_conti_c)
+
+    return info_discrete_c.view(batch_size, -1), info_conti_c
+
 
 def generate_images(z_prior, truncation_factor, batch_size, z_dim, num_classes, y_sampler, radius, generator, discriminator,
                     is_train, LOSS, RUN, MODEL, device, is_stylegan, generator_mapping, generator_synthesis, style_mixing_p,
@@ -102,29 +131,65 @@ def generate_images(z_prior, truncation_factor, batch_size, z_dim, num_classes, 
             else:
                 assert 0 <= truncation_factor, "truncation_factor must lie btw 0(strong truncation) ~ inf(no truncation)"
 
-    try:
-        _, info_sampler = y_sampler.split('info_')
+    sampler_names = y_sampler.split('info_')
+    vis_info = sampler_names[0] == ''   # 'info_' header appears in y_sampler
+    if vis_info:
+        info_sampler = sampler_names[1]
         y_sampler = 'totally_random'
-    except:
-        pass
+    else:
+        info_sampler = 'totally_random'
 
-    zs, fake_labels, zs_eps = sample_zy(z_prior=z_prior,
-                                        batch_size=batch_size,
-                                        z_dim=z_dim,
-                                        num_classes=num_classes,
-                                        truncation_factor=-1 if is_stylegan else truncation_factor,
-                                        y_sampler=y_sampler,
-                                        radius=radius,
-                                        device=device)
-    batch_size = fake_labels.shape[0]
-    info_discrete_c, info_conti_c = None, None
-    if MODEL.info_type in ["discrete", "both"]:
-        for c in range(MODEL.info_num_discrete_c):
-            info_discrete_c = sample_y(info_sampler, batch_size, MODEL.info_dim_discrete_c, device)
-            #info_discrete_c = torch.randint(MODEL.info_dim_discrete_c,(batch_size, MODEL.info_num_discrete_c), device=device)
-            zs = torch.cat((zs, F.one_hot(info_discrete_c, MODEL.info_dim_discrete_c).view(batch_size, -1)), dim=1)
-    if MODEL.info_type in ["continuous", "both"]:
-        info_conti_c = torch.rand(batch_size, MODEL.info_num_conti_c, device=device) * 2 - 1
+
+    # Generate info latents
+    if vis_info:
+        info_sampler = sampler_names[1]
+
+        info_discrete_c, info_conti_c = sample_info(info_type=MODEL.info_type, 
+                                                    batch_size=batch_size, 
+                                                    info_num_discrete_c=MODEL.info_num_discrete_c, 
+                                                    info_dim_discrete_c=MODEL.info_dim_discrete_c, 
+                                                    info_num_conti_c=MODEL.info_num_conti_c, 
+                                                    info_sampler=info_sampler, 
+                                                    device=device)
+        batch_size = info_discrete_c.shape[0]
+
+        zs, fake_labels, zs_eps = sample_zy(z_prior=z_prior,
+                                            batch_size=batch_size,
+                                            z_dim=z_dim,
+                                            num_classes=num_classes,
+                                            truncation_factor=-1 if is_stylegan else truncation_factor,
+                                            y_sampler='totally_random',
+                                            radius=radius,
+                                            device=device)
+        
+        batch_size = fake_labels.shape[0]
+    else:
+        zs, fake_labels, zs_eps = sample_zy(z_prior=z_prior,
+                                            batch_size=batch_size,
+                                            z_dim=z_dim,
+                                            num_classes=num_classes,
+                                            truncation_factor=-1 if is_stylegan else truncation_factor,
+                                            y_sampler=y_sampler,
+                                            radius=radius,
+                                            device=device)
+        batch_size = fake_labels.shape[0]
+
+        info_discrete_c, info_conti_c = sample_info(info_type=MODEL.info_type, 
+                                                    batch_size=batch_size, 
+                                                    info_num_discrete_c=MODEL.info_num_discrete_c, 
+                                                    info_dim_discrete_c=MODEL.info_dim_discrete_c, 
+                                                    info_num_conti_c=MODEL.info_num_conti_c, 
+                                                    info_sampler='totally_random', 
+                                                    device=device)
+        batch_size = info_discrete_c.shape[0]
+
+    # Concatenate info latents to prior latent
+    #for info_var in info_var_list:
+    #    zs = torch.cat((zs, info_var), dim=1)
+    if info_discrete_c is not None:
+        info_discrete_var = F.one_hot(info_discrete_c, MODEL.info_dim_discrete_c).view(batch_size, -1)
+        zs = torch.cat((zs, info_discrete_var), dim=1)
+    if info_conti_c is not None:
         zs = torch.cat((zs, info_conti_c), dim=1)
 
     trsp_cost = None

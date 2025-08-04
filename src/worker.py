@@ -59,7 +59,7 @@ LOG_FORMAT = ("Step: {step:>6} "
 class WORKER(object):
     def __init__(self, cfgs, run_name, Gen, Gen_mapping, Gen_synthesis, Dis, Gen_ema, Gen_ema_mapping, Gen_ema_synthesis,
                  ema, eval_model, train_dataloader, eval_dataloader, global_rank, local_rank, mu, sigma, real_feats, logger,
-                 aa_p, best_step, best_fid, best_ckpt_path, lecam_emas, num_eval, loss_list_dict, metric_dict_during_train, visualize_target='class'):
+                 aa_p, best_step, best_fid, best_ckpt_path, lecam_emas, num_eval, loss_list_dict, metric_dict_during_train):
         self.cfgs = cfgs
         self.run_name = run_name
         self.Gen = Gen
@@ -110,8 +110,11 @@ class WORKER(object):
         num_classes = self.DATA.num_classes
 
         self.sampler = misc.define_sampler(self.DATA.name, self.MODEL.d_cond_mtd,
-                                            self.OPTIMIZATION.batch_size, self.DATA.num_classes, 
-                                            target=visualize_target)
+                                            #self.OPTIMIZATION.batch_size,
+                                            self.OPTIMIZATION.eval_batch_size, 
+                                            #self.DATA.num_classes,
+                                            self.MODEL.info_dim_discrete_c if self.RUN.vis_info else self.DATA.num_classes,
+                                            show_info=self.RUN.vis_info)
 
         self.pl_reg = losses.PathLengthRegularizer(device=local_rank, pl_weight=cfgs.STYLEGAN.pl_weight, pl_no_weight_grad=(cfgs.MODEL.backbone == "stylegan2"))
         self.l2_loss = torch.nn.MSELoss()
@@ -814,7 +817,8 @@ class WORKER(object):
 
             fake_images, fake_labels, _, _, _, _, _ = sample.generate_images(z_prior=self.MODEL.z_prior,
                                                                        truncation_factor=self.RUN.truncation_factor,
-                                                                       batch_size=self.OPTIMIZATION.batch_size,
+                                                                       #batch_size=self.OPTIMIZATION.batch_size,
+                                                                       batch_size=self.OPTIMIZATION.eval_batch_size,
                                                                        z_dim=self.MODEL.z_dim,
                                                                        num_classes=self.DATA.num_classes,
                                                                        y_sampler=self.sampler,

@@ -332,9 +332,9 @@ def apply_standing_statistics(generator, standing_max_batch, standing_step, DATA
                                                                    cal_trsp_cost=False)
     generator.eval()
 
-def define_sampler(dataset_name, dis_cond_mtd, batch_size, num_classes, target='class'):
-    if target == "class" and dis_cond_mtd != "W/O":
-            return "totally_random"
+def define_sampler(dataset_name, dis_cond_mtd, batch_size, num_classes, show_info=False):
+    if not show_info and dis_cond_mtd != "W/O": # Visualizing unconditional samples
+        return "totally_random"
     
     MAX_NUM_CELL = 100
     num_full_vis = num_classes * 8
@@ -343,7 +343,7 @@ def define_sampler(dataset_name, dis_cond_mtd, batch_size, num_classes, target='
     else:
         sampler = "acending_some"
 
-    if target == 'info':
+    if show_info:
         sampler = 'info_' + sampler
     return sampler
 

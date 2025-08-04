@@ -25,3 +25,5 @@ MODEL:
 LOSS:
   adv_loss: "hinge"
   infoGAN_loss_discrete_lambda: 0.1
+OPTIMIZATION:
+  eval_batch_size: 96
