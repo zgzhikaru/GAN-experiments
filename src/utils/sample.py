@@ -102,6 +102,12 @@ def generate_images(z_prior, truncation_factor, batch_size, z_dim, num_classes, 
             else:
                 assert 0 <= truncation_factor, "truncation_factor must lie btw 0(strong truncation) ~ inf(no truncation)"
 
+    try:
+        _, info_sampler = y_sampler.split('info_')
+        y_sampler = 'totally_random'
+    except:
+        pass
+
     zs, fake_labels, zs_eps = sample_zy(z_prior=z_prior,
                                         batch_size=batch_size,
                                         z_dim=z_dim,
@@ -113,8 +119,10 @@ def generate_images(z_prior, truncation_factor, batch_size, z_dim, num_classes, 
     batch_size = fake_labels.shape[0]
     info_discrete_c, info_conti_c = None, None
     if MODEL.info_type in ["discrete", "both"]:
-        info_discrete_c = torch.randint(MODEL.info_dim_discrete_c,(batch_size, MODEL.info_num_discrete_c), device=device)
-        zs = torch.cat((zs, F.one_hot(info_discrete_c, MODEL.info_dim_discrete_c).view(batch_size, -1)), dim=1)
+        for c in range(MODEL.info_num_discrete_c):
+            info_discrete_c = sample_y(info_sampler, batch_size, MODEL.info_dim_discrete_c, device)
+            #info_discrete_c = torch.randint(MODEL.info_dim_discrete_c,(batch_size, MODEL.info_num_discrete_c), device=device)
+            zs = torch.cat((zs, F.one_hot(info_discrete_c, MODEL.info_dim_discrete_c).view(batch_size, -1)), dim=1)
     if MODEL.info_type in ["continuous", "both"]:
         info_conti_c = torch.rand(batch_size, MODEL.info_num_conti_c, device=device) * 2 - 1
         zs = torch.cat((zs, info_conti_c), dim=1)
